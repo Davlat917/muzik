@@ -41,6 +41,9 @@ dependencies:
   on_audio_query: ^2.9.0
 
   audioplayers: ^6.0.0
+  flutter_riverpod: ^2.5.1
+
+  url_launcher: ^6.1.10
 
 dev_dependencies:
   flutter_test:

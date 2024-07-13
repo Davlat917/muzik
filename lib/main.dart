@@ -1,204 +1,147 @@
-import 'dart:async';
-import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:muzikapp/ctr_main.dart';
+import 'package:muzikapp/playurl.dart';
+import 'package:on_audio_query/on_audio_query.dart';
 
 void main() {
-  runApp(const MaterialApp(home: SimpleExampleApp()));
+  runApp(const ProviderScope(child: MaterialApp(home: Songs())));
 }
 
-class SimpleExampleApp extends StatefulWidget {
-  const SimpleExampleApp();
+class Songs extends ConsumerWidget {
+  const Songs({Key? key}) : super(key: key);
 
   @override
-  _SimpleExampleAppState createState() => _SimpleExampleAppState();
-}
+  Widget build(BuildContext context, WidgetRef ref) {
+    final ctr = ref.read(mainControllerProvider);
+    ref.watch(mainControllerProvider);
 
-class _SimpleExampleAppState extends State<SimpleExampleApp> {
-  late AudioPlayer player;
-
-  @override
-  void initState() {
-    super.initState();
-
-    player = AudioPlayer();
-    player.setReleaseMode(ReleaseMode.stop);
-
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
-      await player.setSource(AssetSource('Surxan_Music.mp3'));
-
-      await player.resume();
-    });
-  }
-
-  @override
-  void dispose() {
-    player.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Simple Player'),
+        title: const Text("OnAudioQuery Example"),
+        elevation: 2,
       ),
-      body: PlayerWidget(player: player),
-    );
-  }
-}
+      body: Center(
+        child: !ctr.hasPermission
+            ? noAccessToLibraryWidget(context, ref)
+            : FutureBuilder<void>(
+                future: ctr.querySongs(),
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    // return const CircularProgressIndicator();
+                  }
 
-class PlayerWidget extends StatefulWidget {
-  final AudioPlayer player;
+                  if (ctr.songs.isEmpty) {
+                    return const Text("Nothing found!");
+                  }
 
-  const PlayerWidget({required this.player, Key? key}) : super(key: key);
-
-  @override
-  State<StatefulWidget> createState() => _PlayerWidgetState();
-}
-
-class _PlayerWidgetState extends State<PlayerWidget> {
-  PlayerState? _playerState;
-  Duration? _duration;
-  Duration? _position;
-
-  StreamSubscription? _durationSubscription;
-  StreamSubscription? _positionSubscription;
-  StreamSubscription? _playerCompleteSubscription;
-  StreamSubscription? _playerStateChangeSubscription;
-
-  bool get _isPlaying => _playerState == PlayerState.playing;
-  bool get _isPaused => _playerState == PlayerState.paused;
-
-  String get _durationText => _duration?.toString().split('.').first ?? '';
-  String get _positionText => _position?.toString().split('.').first ?? '';
-
-  AudioPlayer get player => widget.player;
-
-  @override
-  void initState() {
-    super.initState();
-    _playerState = player.state;
-    player.getDuration().then((value) => setState(() {
-          _duration = value;
-        }));
-    player.getCurrentPosition().then((value) => setState(() {
-          _position = value;
-        }));
-    _initStreams();
-  }
-
-  @override
-  void setState(VoidCallback fn) {
-    if (mounted) {
-      super.setState(fn);
-    }
-  }
-
-  @override
-  void dispose() {
-    _durationSubscription?.cancel();
-    _positionSubscription?.cancel();
-    _playerCompleteSubscription?.cancel();
-    _playerStateChangeSubscription?.cancel();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final color = Theme.of(context).primaryColor;
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: <Widget>[
-        Row(
+                  return ListView.builder(
+                    itemCount: ctr.songs.length,
+                    itemBuilder: (context, index) {
+                      return ListTile(
+                        leading: QueryArtworkWidget(
+                          id: ctr.songs[index].id,
+                          type: ArtworkType.AUDIO,
+                          nullArtworkWidget: const Icon(Icons.music_note),
+                        ),
+                        title: Text(ctr.songs[index].title),
+                        subtitle: Text(ctr.songs[index].artist == '<unknown>'
+                            ? ''
+                            : "${ctr.songs[index].artist}"),
+                        trailing: const Icon(Icons.play_arrow),
+                        onTap: () => ctr.playSong(index),
+                      );
+                    },
+                  );
+                },
+              ),
+      ),
+      bottomNavigationBar: BottomAppBar(
+        height: 150,
+        child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            IconButton(
-              key: const Key('play_button'),
-              onPressed: _isPlaying ? null : _play,
-              iconSize: 48.0,
-              icon: const Icon(Icons.play_arrow),
-              color: color,
+            Slider(
+              min: 0,
+              max: ctr.songDuration.inSeconds.toDouble(),
+              value: ctr.currentPosition.inSeconds.toDouble(),
+              onChanged: (value) async {
+                await ctr.audioPlayer.seek(Duration(seconds: value.toInt()));
+              },
             ),
-            IconButton(
-              key: const Key('pause_button'),
-              onPressed: _isPlaying ? _pause : null,
-              iconSize: 48.0,
-              icon: const Icon(Icons.pause),
-              color: color,
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16.0),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(ctr.formatDuration(ctr.currentPosition)),
+                  Text(ctr.formatDuration(ctr.songDuration)),
+                ],
+              ),
             ),
-            IconButton(
-              key: const Key('stop_button'),
-              onPressed: _isPlaying || _isPaused ? _stop : null,
-              iconSize: 48.0,
-              icon: const Icon(Icons.stop),
-              color: color,
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+                IconButton(
+                  icon: const Icon(Icons.skip_previous),
+                  onPressed: ctr.previousSong,
+                ),
+                IconButton(
+                  icon: ctr.isPlaying ? const Icon(Icons.pause) : const Icon(Icons.play_arrow),
+                  onPressed: ctr.isPlaying ? ctr.pauseSong : ctr.resumeSong,
+                ),
+                IconButton(
+                  icon: const Icon(Icons.skip_next),
+                  onPressed: ctr.nextSong,
+                ),
+              ],
             ),
           ],
         ),
-        Slider(
-          onChanged: (value) {
-            final duration = _duration;
-            if (duration == null) {
-              return;
-            }
-            final position = value * duration.inMilliseconds;
-            player.seek(Duration(milliseconds: position.round()));
-          },
-          value: (_position != null &&
-                  _duration != null &&
-                  _position!.inMilliseconds > 0 &&
-                  _position!.inMilliseconds < _duration!.inMilliseconds)
-              ? _position!.inMilliseconds / _duration!.inMilliseconds
-              : 0.0,
-        ),
-        Text(
-          _position != null
-              ? '$_positionText / $_durationText'
-              : _duration != null
-                  ? _durationText
-                  : '',
-          style: const TextStyle(fontSize: 16.0),
-        ),
-      ],
+      ),
+      floatingActionButtonLocation: FloatingActionButtonLocation.endTop,
+      floatingActionButton: FloatingActionButton(onPressed: () {
+        Navigator.push(context, MaterialPageRoute(builder: (context) => const PlayFromUrlPage()));
+      }),
     );
   }
 
-  void _initStreams() {
-    _durationSubscription = player.onDurationChanged.listen((duration) {
-      setState(() => _duration = duration);
-    });
-
-    _positionSubscription = player.onPositionChanged.listen((p) => setState(() => _position = p));
-
-    _playerCompleteSubscription = player.onPlayerComplete.listen((event) {
-      setState(() {
-        _playerState = PlayerState.stopped;
-        _position = Duration.zero;
-      });
-    });
-
-    _playerStateChangeSubscription = player.onPlayerStateChanged.listen((state) {
-      setState(() {
-        _playerState = state;
-      });
-    });
-  }
-
-  Future<void> _play() async {
-    await player.resume();
-    setState(() => _playerState = PlayerState.playing);
-  }
-
-  Future<void> _pause() async {
-    await player.pause();
-    setState(() => _playerState = PlayerState.paused);
-  }
-
-  Future<void> _stop() async {
-    await player.stop();
-    setState(() {
-      _playerState = PlayerState.stopped;
-      _position = Duration.zero;
-    });
+  Widget noAccessToLibraryWidget(BuildContext context, WidgetRef ref) {
+    final ctr = ref.read(mainControllerProvider);
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(10),
+        color: Colors.redAccent.withOpacity(0.5),
+      ),
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Text("Application doesn't have access to the library"),
+          const SizedBox(height: 10),
+          ElevatedButton(
+            onPressed: () async {
+              await ctr.requestPermission();
+              if (!ctr.hasPermission) {
+                showDialog(
+                  context: context,
+                  builder: (context) => AlertDialog(
+                    title: const Text('Permission Denied'),
+                    content: const Text('Storage permission is required to access songs.'),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.of(context).pop(),
+                        child: const Text('OK'),
+                      ),
+                    ],
+                  ),
+                );
+              }
+            },
+            child: const Text("Allow"),
+          ),
+        ],
+      ),
+    );
   }
 }
